@@ -2,7 +2,7 @@
 
 Python-скрипт для збору даних з каталогу GenuineFactoryParts ARI PartStream. Скрипт збирає OEM-номери деталей та їх описи за шляхом:
 
-`MTD Merged Data Staging > Troy-Bilt > 11-Push Walk-Behind Mowers > 2024/2025/2026 Models > model > Assemblies > scheme`
+`MTD Merged Data Staging > Troy-Bilt > 11-Push Walk-Behind Mowers > 2024/2025 Models > model > Assemblies > scheme`
 
 Результат зберігається у CSV. Повторний запуск не створює дублікати, бо записи оновлюються за унікальним ключем.
 
@@ -29,13 +29,13 @@ source venv/bin/activate
 ## Запуск
 
 ```bash
-python scraper.py --years 2024 2025 2026 --output data/parts.csv
+python scraper.py --years 2024 2025 --output data/parts.csv
 ```
 
 Запуск для налагодження у видимому браузері:
 
 ```bash
-python scraper.py --years 2026 --headless false --slow-mo-ms 150 --output data/parts.csv
+python scraper.py --years 2025 --headless false --slow-mo-ms 150 --output data/parts.csv
 ```
 
 Файли за замовчуванням:
@@ -73,19 +73,9 @@ python scraper.py --years 2026 --headless false --slow-mo-ms 150 --output data/p
 3. Додати тригер з потрібним розкладом.
 4. Додати дію:
    - Program/script: `C:\path\to\repo\venv\Scripts\python.exe`
-   - Arguments: `scraper.py --years 2024 2025 2026 --output data\parts.csv --log-file logs\run.log`
+   - Arguments: `scraper.py --years 2024 2025 --output data\parts.csv --log-file logs\run.log`
    - Start in: `C:\path\to\repo`
 5. Зберегти задачу і запустити її вручну один раз, щоб перевірити оновлення `logs\run.log`.
-
-Для скріншота до тестового завдання достатньо показати термінал або рядки з `logs/run.log`, де видно:
-
-- час старту запуску
-- вибрані роки
-- кількість зібраних записів
-- кількість нових записів
-- кількість оновлених записів
-- кількість помилок
-- шлях до CSV-файлу
 
 ## Тести
 
@@ -103,7 +93,7 @@ ruff check .
 
 ## GitHub Actions
 
-На кожен push у гілку `master` запускається workflow `Scrape Parts Catalog`. Він встановлює залежності, запускає скрипт у headless-режимі та зберігає результати як artifacts:
+На кожен push у гілку `main` запускається workflow `Scrape Parts Catalog`. Він встановлює залежності, запускає скрипт у headless-режимі та зберігає результати як artifacts:
 
 - `parts-csv` — файл `data/parts.csv`
 - `scraper-log` — файл `logs/run.log`
