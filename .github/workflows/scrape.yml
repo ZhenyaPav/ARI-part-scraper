@@ -3,7 +3,7 @@ name: Scrape Parts Catalog
 on:
   push:
     branches:
-      - master
+      - main
 
 jobs:
   scrape:
