@@ -28,7 +28,7 @@ jobs:
       - name: Run scraper
         run: |
           python scraper.py \
-            --years 2024 2025 2026 \
+            --years 2024 2025 \
             --headless true \
             --concurrency 4 \
             --output data/parts.csv \
