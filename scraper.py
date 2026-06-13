@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from playwright.async_api import Frame, Page
+    from playwright.async_api import BrowserContext, Frame, Page
 
 
 START_URL = "https://www.genuinefactoryparts.com/en_US/ari-partstream.html"
@@ -78,6 +78,15 @@ class UpsertStats:
 class ScrapeStats:
     collected: int = 0
     errors: int = 0
+
+
+@dataclass(frozen=True)
+class SchemeJob:
+    year: str
+    model: str
+    scheme: str
+    context_path: list[str]
+    scheme_path: list[str]
 
 
 def normalize_text(value: str) -> str:
@@ -167,11 +176,13 @@ class PartStreamScraper:
         headless: bool,
         artifacts_dir: Path,
         slow_mo_ms: int = 0,
+        concurrency: int = 1,
     ) -> None:
         self.years = [str(year) for year in years]
         self.headless = headless
         self.artifacts_dir = artifacts_dir
         self.slow_mo_ms = slow_mo_ms
+        self.concurrency = max(1, concurrency)
         self.scraped_at = utc_now()
         self.stats = ScrapeStats()
 
@@ -189,8 +200,17 @@ class PartStreamScraper:
                     locale="en-US",
                 )
                 page = await context.new_page()
-                await self._open_start_page(page)
-                records = await self._scrape_page(page)
+                try:
+                    jobs = await self._discover_scheme_jobs(page)
+                finally:
+                    await page.close()
+
+                logging.info(
+                    "Discovered %s scheme jobs; scraping with concurrency=%s",
+                    len(jobs),
+                    min(self.concurrency, len(jobs)) if jobs else 0,
+                )
+                records = await self._scrape_jobs(context, jobs)
                 self.stats.collected = len(records)
                 return records
             finally:
@@ -202,13 +222,13 @@ class PartStreamScraper:
         await page.wait_for_load_state("networkidle", timeout=30000)
         await self._dismiss_overlays(page)
 
-    async def _scrape_page(self, page: Page) -> list[PartRecord]:
-        all_records: list[PartRecord] = []
-
+    async def _discover_scheme_jobs(self, page: Page) -> list[SchemeJob]:
+        jobs: list[SchemeJob] = []
         for year in self.years:
             year_label = f"{year} Models"
             context_path = [*BASE_PATH, year_label]
             try:
+                await self._open_start_page(page)
                 await self._navigate_path(page, context_path)
                 models = await self._visible_model_labels(page, year)
                 logging.info("Found %s candidate models for %s", len(models), year_label)
@@ -230,29 +250,79 @@ class PartStreamScraper:
 
                 for scheme in schemes:
                     scheme_path = [*model_path, scheme]
-                    try:
-                        await self._open_start_page(page)
-                        await self._navigate_path(page, [*context_path, model])
-                        await self._open_assemblies(page)
-                        await self._click_best_text(page, scheme)
-                        records = await self._extract_parts(
-                            page,
-                            year,
-                            model,
-                            "Assemblies",
-                            scheme,
-                            scheme_path,
+                    jobs.append(
+                        SchemeJob(
+                            year=year,
+                            model=model,
+                            scheme=scheme,
+                            context_path=context_path,
+                            scheme_path=scheme_path,
                         )
-                        logging.info(
-                            "Collected %s parts from %s",
-                            len(records),
-                            " - ".join(scheme_path),
-                        )
-                        all_records.extend(records)
-                    except Exception as exc:
-                        await self._record_error(page, "scheme", scheme_path, exc)
+                    )
 
-        return all_records
+        return jobs
+
+    async def _scrape_jobs(
+        self,
+        context: BrowserContext,
+        jobs: Sequence[SchemeJob],
+    ) -> list[PartRecord]:
+        if not jobs:
+            return []
+
+        queue: asyncio.Queue[SchemeJob] = asyncio.Queue()
+        for job in jobs:
+            queue.put_nowait(job)
+
+        records: list[PartRecord] = []
+        worker_count = min(self.concurrency, len(jobs))
+
+        async def worker(worker_id: int) -> None:
+            page = await context.new_page()
+            try:
+                while True:
+                    try:
+                        job = queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        return
+
+                    try:
+                        job_records = await self._scrape_scheme_job(page, job)
+                        records.extend(job_records)
+                    except Exception as exc:
+                        await self._record_error(
+                            page,
+                            f"scheme_worker_{worker_id}",
+                            job.scheme_path,
+                            exc,
+                        )
+                    finally:
+                        queue.task_done()
+            finally:
+                await page.close()
+
+        await asyncio.gather(*(worker(worker_id) for worker_id in range(1, worker_count + 1)))
+        return records
+
+    async def _scrape_scheme_job(self, page: Page, job: SchemeJob) -> list[PartRecord]:
+        await self._open_start_page(page)
+        await self._navigate_path(page, [*job.context_path, job.model])
+        await self._open_assemblies(page)
+        await self._click_best_text(page, job.scheme)
+        records = await self._extract_parts(
+            page,
+            job.year,
+            job.model,
+            "Assemblies",
+            job.scheme,
+            job.scheme_path,
+        )
+        logging.info(
+            "Collected %s parts from %s",
+            len(records),
+            " - ".join(job.scheme_path),
+        )
+        return records
 
     async def _navigate_path(self, page: Page, labels: Sequence[str]) -> None:
         await self._dismiss_overlays(page)
@@ -663,6 +733,12 @@ def parse_args() -> argparse.Namespace:
         default=0,
         help="Slow Playwright actions for headed debugging.",
     )
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=1,
+        help="Number of independent browser pages to use for scheme scraping.",
+    )
     return parser.parse_args()
 
 
@@ -672,12 +748,14 @@ async def main_async() -> int:
     started_at = utc_now()
     logging.info("Run started at %s", started_at)
     logging.info("Selected years: %s", ", ".join(args.years))
+    logging.info("Scrape concurrency: %s", args.concurrency)
 
     scraper = PartStreamScraper(
         years=args.years,
         headless=args.headless,
         artifacts_dir=args.artifacts_dir,
         slow_mo_ms=args.slow_mo_ms,
+        concurrency=args.concurrency,
     )
     records = await scraper.scrape()
     upsert_stats = upsert_csv(args.output, records)
