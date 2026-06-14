@@ -32,6 +32,19 @@ source venv/bin/activate
 python scraper.py --years 2024 2025 --output data/parts.csv
 ```
 
+Запуск з синхронізацією CSV через S3:
+
+```bash
+python scraper.py \
+  --years 2024 2025 \
+  --output data/parts.csv \
+  --s3-bucket your-results-bucket \
+  --s3-key latest/parts.csv
+```
+
+Якщо `latest/parts.csv` вже існує в S3, скрипт спочатку завантажить його,
+оновить локально через upsert-логіку, а потім завантажить назад у S3.
+
 Запуск для налагодження у видимому браузері:
 
 ```bash

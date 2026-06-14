@@ -5,6 +5,7 @@ import asyncio
 import csv
 import hashlib
 import logging
+import os
 import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -167,6 +168,36 @@ def upsert_csv(path: Path, records: Iterable[PartRecord]) -> UpsertStats:
         writer.writerows(sorted(rows.values(), key=lambda item: item["unique_key"]))
 
     return stats
+
+
+def is_missing_s3_object_error(exc: Exception) -> bool:
+    response = getattr(exc, "response", {})
+    error = response.get("Error", {}) if isinstance(response, dict) else {}
+    return error.get("Code") in {"404", "NoSuchKey", "NotFound"}
+
+
+def download_existing_csv_from_s3(bucket: str, key: str, path: Path) -> None:
+    import boto3
+    from botocore.exceptions import ClientError
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    client = boto3.client("s3")
+    try:
+        client.download_file(bucket, key, str(path))
+    except ClientError as exc:
+        if is_missing_s3_object_error(exc):
+            logging.info("No existing CSV found at s3://%s/%s; starting fresh", bucket, key)
+            return
+        raise
+    logging.info("Downloaded existing CSV from s3://%s/%s to %s", bucket, key, path)
+
+
+def upload_csv_to_s3(path: Path, bucket: str, key: str) -> None:
+    import boto3
+
+    client = boto3.client("s3")
+    client.upload_file(str(path), bucket, key, ExtraArgs={"ContentType": "text/csv"})
+    logging.info("Uploaded CSV to s3://%s/%s", bucket, key)
 
 
 class PartStreamScraper:
@@ -739,7 +770,21 @@ def parse_args() -> argparse.Namespace:
         default=1,
         help="Number of independent browser pages to use for scheme scraping.",
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--s3-bucket",
+        default=os.environ.get("S3_BUCKET"),
+        help="Optional S3 bucket for the merged CSV. Defaults to S3_BUCKET.",
+    )
+    parser.add_argument(
+        "--s3-key",
+        default=os.environ.get("S3_KEY"),
+        help="Optional S3 object key for the merged CSV. Defaults to S3_KEY.",
+    )
+
+    args = parser.parse_args()
+    if bool(args.s3_bucket) != bool(args.s3_key):
+        parser.error("--s3-bucket and --s3-key must be provided together")
+    return args
 
 
 async def main_async() -> int:
@@ -749,6 +794,9 @@ async def main_async() -> int:
     logging.info("Run started at %s", started_at)
     logging.info("Selected years: %s", ", ".join(args.years))
     logging.info("Scrape concurrency: %s", args.concurrency)
+    if args.s3_bucket and args.s3_key:
+        logging.info("S3 CSV target: s3://%s/%s", args.s3_bucket, args.s3_key)
+        download_existing_csv_from_s3(args.s3_bucket, args.s3_key, args.output)
 
     scraper = PartStreamScraper(
         years=args.years,
@@ -759,6 +807,8 @@ async def main_async() -> int:
     )
     records = await scraper.scrape()
     upsert_stats = upsert_csv(args.output, records)
+    if args.s3_bucket and args.s3_key:
+        upload_csv_to_s3(args.output, args.s3_bucket, args.s3_key)
 
     finished_at = utc_now()
     logging.info("Run finished at %s", finished_at)

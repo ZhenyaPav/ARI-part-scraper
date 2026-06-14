@@ -8,6 +8,7 @@ import pytest
 from scraper import (
     CSV_FIELDS,
     PartRecord,
+    is_missing_s3_object_error,
     parse_bool,
     parse_part_line,
     read_existing_rows,
@@ -98,6 +99,21 @@ def test_parse_bool_accepts_common_values(value: str, expected: bool) -> None:
 def test_parse_bool_rejects_unknown_value() -> None:
     with pytest.raises(argparse.ArgumentTypeError):
         parse_bool("maybe")
+
+
+@pytest.mark.parametrize("code", ["404", "NoSuchKey", "NotFound"])
+def test_missing_s3_object_errors_are_detected(code: str) -> None:
+    class S3Error(Exception):
+        response = {"Error": {"Code": code}}
+
+    assert is_missing_s3_object_error(S3Error())
+
+
+def test_non_missing_s3_object_errors_are_not_detected() -> None:
+    class S3Error(Exception):
+        response = {"Error": {"Code": "AccessDenied"}}
+
+    assert not is_missing_s3_object_error(S3Error())
 
 
 @pytest.mark.parametrize(
