@@ -58,6 +58,41 @@ python scraper.py --years 2025 --headless false --slow-mo-ms 150 --output data/p
 
 `unique_key` формується як SHA-256 від `full_scheme_path`, `oem` та `description`. Якщо запис з таким ключем уже є у CSV, скрипт оновлює його тільки тоді, коли змінилися основні поля.
 
+## Docker
+
+Зібрати образ локально:
+
+```bash
+docker build -t ari-part-scraper .
+```
+
+Запустити контейнер і зберегти CSV, логи та артефакти у поточному каталозі:
+
+```bash
+mkdir -p data logs artifacts/errors
+docker run --rm \
+  -v "$PWD/data:/app/data" \
+  -v "$PWD/logs:/app/logs" \
+  -v "$PWD/artifacts:/app/artifacts" \
+  ari-part-scraper \
+  --years 2024 2025 \
+  --headless true \
+  --concurrency 4 \
+  --output data/parts.csv \
+  --log-file logs/run.log \
+  --artifacts-dir artifacts/errors
+```
+
+Опублікований GitHub Actions образ буде доступний у GitHub Container Registry:
+
+```bash
+docker pull ghcr.io/zhenyapav/ari-part-scraper:latest
+```
+
+Workflow `Build Container Image` збирає образ на `pull_request`, а на push у `main`,
+теги `v*` або ручний запуск також публікує його в GHCR. Для публікації
+використовується стандартний `GITHUB_TOKEN` з правом `packages: write`.
+
 ## Імпорт CSV у Google Sheets
 
 1. Відкрити Google Sheets.
@@ -98,6 +133,9 @@ ruff check .
 - `parts-csv` — файл `data/parts.csv`
 - `scraper-log` — файл `logs/run.log`
 - `scraper-error-artifacts` — скріншоти та HTML-знімки помилок, якщо вони були створені
+
+Workflow `Build Container Image` збирає Docker-образ і публікує теги `latest`,
+`main`, `sha-<commit>` та `v*` у `ghcr.io/zhenyapav/ari-part-scraper`.
 
 ## Примітки
 

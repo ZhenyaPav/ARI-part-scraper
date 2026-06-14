@@ -1,0 +1,15 @@
+.git
+.github
+.pytest_cache
+.ruff_cache
+.venv
+venv
+__pycache__
+*.pyc
+
+artifacts
+data
+logs
+
+*.pdf
+Dockerfile
